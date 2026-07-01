@@ -824,16 +824,16 @@ target("infinicore_cpp_api")
             -- Prefer xmake --cuda=... for deterministic SDK include/link paths.
             local normalized_cuda_sdk = normalize_cuda_root(cuda_sdk)
             if normalized_cuda_sdk then
-                add_includedirs(path.join(normalized_cuda_sdk, "include"))
-                add_linkdirs(path.join(normalized_cuda_sdk, "lib64"))
+                target:add("includedirs", path.join(normalized_cuda_sdk, "include"))
+                target:add("linkdirs", path.join(normalized_cuda_sdk, "lib64"))
             end
 
             -- Keep DTK fallback paths for environments where only DTK_ROOT is set.
             if dtk_root and dtk_root ~= "" and os.isdir(dtk_root) then
-                add_includedirs(path.join(dtk_root, "include"))
-                add_includedirs(path.join(dtk_root, "cuda", "include"))
-                add_linkdirs(path.join(dtk_root, "lib"))
-                add_linkdirs(path.join(dtk_root, "cuda", "lib64"))
+                target:add("includedirs", path.join(dtk_root, "include"))
+                target:add("includedirs", path.join(dtk_root, "cuda", "include"))
+                target:add("linkdirs", path.join(dtk_root, "lib"))
+                target:add("linkdirs", path.join(dtk_root, "cuda", "lib64"))
             end
         end
 
@@ -958,7 +958,7 @@ target("infinicore_cpp_api")
                     "-Wl,-rpath," .. pylib,
                     { force = true }
                 )
-            else if has_config("hygon-dcu") then  
+            elseif has_config("hygon-dcu") then  
                 local torch_libdir = path.join(TORCH_DIR, "lib")
                 target:add("rpathdirs", torch_libdir)
                 target:add("ldflags", "-Wl,--no-as-needed", {force = true})
@@ -1006,6 +1006,38 @@ target("infinicore_cpp_api")
         end
 
     end)
+
+    -- Hygon DCU: force-link torch HIP libs into the shared library (before_build ldflags are not applied to .so link).
+    if has_config("hygon-dcu") and has_config("aten") then
+        before_link(function (target)
+            local torch_dir = os.iorunv("python", {"-c",
+                "import torch, os; print(os.path.dirname(torch.__file__))"}):trim()
+            local torch_libdir = path.join(torch_dir, "lib")
+            local function has_torch_lib(name)
+                return #os.files(path.join(torch_libdir, "lib" .. name .. ".so*")) > 0
+            end
+            target:add("shflags",
+                "-Wl,--no-as-needed",
+                "-L" .. torch_libdir,
+                "-ltorch",
+                "-lc10",
+                {force = true})
+            if has_torch_lib("torch_hip") then
+                target:add("shflags", "-l:libtorch_hip.so", {force = true})
+            elseif has_torch_lib("torch_cuda") then
+                target:add("shflags", "-l:libtorch_cuda.so", {force = true})
+            end
+            if has_torch_lib("c10_hip") then
+                target:add("shflags", "-l:libc10_hip.so", {force = true})
+            elseif has_torch_lib("c10_cuda") then
+                target:add("shflags", "-l:libc10_cuda.so", {force = true})
+            end
+            target:add("shflags",
+                "-Wl,--as-needed",
+                "-Wl,-rpath," .. torch_libdir,
+                {force = true})
+        end)
+    end
 
     -- Moore mate: force link torch_python to bypass --as-needed
     if has_config("moore-gpu") and has_config("aten") and has_config("flash-attn") then

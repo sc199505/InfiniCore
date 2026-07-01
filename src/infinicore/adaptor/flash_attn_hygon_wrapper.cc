@@ -3,7 +3,11 @@
 #include <ATen/ATen.h>
 #include <c10/util/Optional.h>
 #include <dlfcn.h>
+#include <link.h>
+#include <unistd.h>
+#include <cstring>
 #include <optional>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -64,17 +68,72 @@ using mha_varlen_fwd_fn_t = std::vector<at::Tensor> (*)(
     c10::optional<at::Generator> gen_,
     const c10::optional<at::Tensor> &s_aux_);
 
+static bool file_exists(const char *path) {
+    return path && *path && access(path, R_OK) == 0;
+}
+
+static int find_loaded_flash_attn_cb(struct dl_phdr_info *info, size_t, void *data) {
+    auto *out = static_cast<std::string *>(data);
+    if (info->dlpi_name && std::strstr(info->dlpi_name, "flash_attn_2_cuda")) {
+        *out = info->dlpi_name;
+        return 1;
+    }
+    return 0;
+}
+
+static std::string find_flash_attn_so_path() {
+    if (const char *prebuilt = std::getenv("FLASH_ATTN_PREBUILT"); file_exists(prebuilt)) {
+        return prebuilt;
+    }
+
+    std::string loaded;
+    dl_iterate_phdr(find_loaded_flash_attn_cb, &loaded);
+    if (!loaded.empty()) {
+        return loaded;
+    }
+
+    if (const char *infini_root = std::getenv("INFINI_ROOT")) {
+        std::string candidate = std::string(infini_root) + "/lib/flash_attn_2_cuda.cpython-310-x86_64-linux-gnu.so";
+        if (file_exists(candidate.c_str())) {
+            return candidate;
+        }
+    }
+
+    return {};
+}
+
+static void *flash_attn_handle() {
+    static void *handle = []() -> void * {
+        const std::string path = find_flash_attn_so_path();
+        if (path.empty()) {
+            return nullptr;
+        }
+
+        void *h = dlopen(path.c_str(), RTLD_NOLOAD | RTLD_NOW);
+        if (!h) {
+            h = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+        }
+        return h;
+    }();
+    return handle;
+}
+
 static void *resolve_symbol(const char *name) {
-    void *sym = dlsym(RTLD_DEFAULT, name);
-    if (sym) {
+    if (void *sym = dlsym(RTLD_DEFAULT, name)) {
         return sym;
     }
+
+    if (void *handle = flash_attn_handle()) {
+        if (void *sym = dlsym(handle, name)) {
+            return sym;
+        }
+    }
+
     throw std::runtime_error(
         std::string("flash_attn symbol not found: ") + name +
         ". Ensure flash_attn_2_cuda is loaded before calling this function "
         "(e.g. import torch; import flash_attn_2_cuda).");
 }
-
 // ---------------------------------------------------------------------------
 // Wrappers in the flash:: namespace.
 // These match the signatures declared in
