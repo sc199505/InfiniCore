@@ -8,6 +8,9 @@
 #if defined(ENABLE_NVIDIA_API) || defined(ENABLE_METAX_API) || defined(ENABLE_QY_API)
 #include <c10/cuda/CUDAGuard.h>
 #endif
+#if defined(ENABLE_HYGON_API)
+#include <c10/hip/HIPGuard.h>
+#endif
 #endif
 
 #if defined(ENABLE_METAX_API)
@@ -47,6 +50,9 @@ void run(void *planned_meta) {
 #ifdef ENABLE_FLASH_ATTN
 #if defined(ENABLE_NVIDIA_API) || defined(ENABLE_METAX_API) || defined(ENABLE_QY_API)
     c10::cuda::CUDAStreamGuard guard(infinicore::adaptor::get_cuda_stream());
+#endif
+#if defined(ENABLE_HYGON_API)
+    c10::hip::HIPStreamGuard guard(infinicore::adaptor::get_hip_stream());
 #endif
     auto *p = reinterpret_cast<PlannedMeta *>(planned_meta);
 

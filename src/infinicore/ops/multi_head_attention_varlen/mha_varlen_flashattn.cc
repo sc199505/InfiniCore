@@ -6,6 +6,9 @@
 #if defined(ENABLE_NVIDIA_API) || defined(ENABLE_METAX_API) || defined(ENABLE_QY_API)
 #include <c10/cuda/CUDAGuard.h>
 #endif
+#if defined(ENABLE_HYGON_API)
+#include <c10/hip/HIPGuard.h>
+#endif
 #endif
 
 #ifdef ENABLE_FLASH_ATTN
@@ -72,11 +75,14 @@ void run(void *planned_meta) {
 #if defined(ENABLE_NVIDIA_API) || defined(ENABLE_METAX_API) || defined(ENABLE_QY_API)
     c10::cuda::CUDAStreamGuard guard(infinicore::adaptor::get_cuda_stream());
 #endif
+#if defined(ENABLE_HYGON_API)
+    c10::hip::HIPStreamGuard guard(infinicore::adaptor::get_hip_stream());
+#endif
     auto *p = reinterpret_cast<PlannedMeta *>(planned_meta);
 
     auto q = infinicore::adaptor::to_aten_tensor(p->q);
-    auto k = infinicore::adaptor::to_aten_tensor(p->k);
-    auto v = infinicore::adaptor::to_aten_tensor(p->v);
+    auto k = infinicore::adaptor::to_aten_tensor(p->k).contiguous();
+    auto v = infinicore::adaptor::to_aten_tensor(p->v).contiguous();
 
     const bool out_need_copy_back = !p->out->is_contiguous();
     Tensor out_work_ic = out_need_copy_back ? p->out->contiguous() : Tensor(p->out);
@@ -137,6 +143,13 @@ void run(void *planned_meta) {
     auto max_seqlen_k = p->max_seqlen_k;
     auto alibi_slopes = p->alibi_slopes ? std::optional<at::Tensor>(infinicore::adaptor::to_aten_tensor(*p->alibi_slopes)) : std::nullopt;
     auto scale = p->scale;
+#if defined(ENABLE_HYGON_API)
+    // Flash-attn requires cu_seqlens and block_table on same device as q/k/v.
+    auto device = q.device();
+    if (!cu_seqlens_q.is_cuda()) cu_seqlens_q = cu_seqlens_q.to(device);
+    if (!cu_seqlens_kv.is_cuda()) cu_seqlens_kv = cu_seqlens_kv.to(device);
+    if (block_table.has_value() && !block_table->is_cuda()) block_table = block_table->to(device);
+#endif
 
 #if defined(ENABLE_METAX_API) && defined(INFINICORE_HPCC_VERSION_MAJOR) && (INFINICORE_HPCC_VERSION_MAJOR >= 3)
     std::optional<at::Tensor> flash_attn_mars_ext = std::nullopt;

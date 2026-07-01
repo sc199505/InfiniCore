@@ -79,7 +79,7 @@ __device__ __forceinline__ float warpReduceMax(float x) {
 }
 
 __device__ __forceinline__ unsigned int cvtaToShared(const void *ptr) {
-#if defined(ENABLE_ILUVATAR_API)
+#if defined(ENABLE_ILUVATAR_API) || defined(ENABLE_HYGON_API)
     return static_cast<unsigned int>(reinterpret_cast<uintptr_t>(ptr));
 #else
     return static_cast<unsigned int>(__cvta_generic_to_shared(ptr));
@@ -87,7 +87,8 @@ __device__ __forceinline__ unsigned int cvtaToShared(const void *ptr) {
 }
 
 __device__ __forceinline__ void cpAsyncCaSharedGlobal16(void *dst_shared, const void *src_global) {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+   // cp.async is NVIDIA PTX-only; Hygon DCU (HIP) must use plain loads instead.
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && !defined(ENABLE_HYGON_API)
     const unsigned int dst = cvtaToShared(dst_shared);
     asm volatile("cp.async.ca.shared.global [%0], [%1], 16;\n" ::"r"(dst), "l"(src_global));
 #else
@@ -98,14 +99,14 @@ __device__ __forceinline__ void cpAsyncCaSharedGlobal16(void *dst_shared, const 
 }
 
 __device__ __forceinline__ void cpAsyncCommit() {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && !defined(ENABLE_HYGON_API)
     asm volatile("cp.async.commit_group;\n" ::);
 #endif
 }
 
 template <int N>
 __device__ __forceinline__ void cpAsyncWaitGroup() {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && !defined(ENABLE_HYGON_API)
     asm volatile("cp.async.wait_group %0;\n" ::"n"(N));
 #endif
 }
@@ -113,7 +114,7 @@ __device__ __forceinline__ void cpAsyncWaitGroup() {
 // cp.async.wait_group requires a compile-time immediate, so for small fixed
 // stage counts we provide a tiny runtime switch.
 __device__ __forceinline__ void cpAsyncWaitGroupRt(int n) {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) && !defined(ENABLE_HYGON_API)
     if (n <= 0) {
         cpAsyncWaitGroup<0>();
     } else if (n == 1) {
